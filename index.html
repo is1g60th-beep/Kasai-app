@@ -155,7 +155,7 @@ textarea{overflow:hidden;resize:vertical}
    - 【仮仕様】の箇所は画面・コード内に明記。
    ========================================================= */
 
-const APP_VERSION = "0.10.0";
+const APP_VERSION = "0.11.0";
 
 /* ---------- マスタ（選択肢）【マニュアル準拠】／一部【仮仕様】 ---------- */
 const M = {
@@ -716,6 +716,7 @@ function checkDoc4(d, recs, photos, persons, staff, evid=[]){
   if (!d.startAt) add(1,"見分開始日時が未入力です。","第5章第4節■1(3)");
   if (!d.endAt) add(2,"見分終了日時が未入力です。","第5章第4節■1(3)");
   if (d.startAt && d.endAt && d.endAt < d.startAt) add(1,"見分終了日時が開始日時より前です。");
+  else if (d.startAt && d.endAt && new Date(d.startAt).toDateString()!==new Date(d.endAt).toDateString()) add(2,"見分が複数日にわたっています。実況見分調査書は実施日ごとに作成します（翌日の見分は第○回として新しく作成）。","第5章（作成時期）");
   if (!d.authorStaffId) add(1,"作成者が未設定です。","第5章第2節");
   if (!d.place) add(1,"場所及び物件が未入力です。","第5章第4節■1(4)");
   if (!(d.witnessIds||[]).length && !d.noWitnessReason) add(1,"立会人が未登録で、立会人なしの理由も未記録です。","第5章第4節■1(5)");
@@ -1442,9 +1443,14 @@ function checkReport(d, c, cause, persons, docs4, agg){
   if (!d.authorStaffId) add(1,"作成者が未設定です。","様式1");
   if (!d.text.damage) add(1,"り災概要が未入力です。","第2章第2節■1");
   if (!d.text.cause) add(1,"出火原因概要が未入力です。","第2章第2節■1");
-  if (!cause.confirmed) add(1,`原因欄は様式2（火災原因判定書）の確定後に反映されます（様式2：${cause.status}）。`,"項目定義表 様式1");
+  if (d.causeOmit){
+    // 様式2を省略する場合【マニュアル準拠：火災原因判定書を省略する場合は、火災調査書の原因判定理由欄に理由を記載】
+    if (!d.text.reason) add(1,"様式2を省略する場合は、原因判定理由欄に省略の理由と判定の要旨を記載します。","第1章（作成の省略）");
+    for (const [k,lab] of [["origin","出火箇所"],["source","発火源"],["process","経過"],["firstIgnited","着火物"]]) if (!d.omitCause?.[k]) add(2,`様式2を省略する場合の原因欄「${lab}」が未入力です。`,"様式1その1");
+  }
+  else if (!cause.confirmed) add(1,`原因欄は様式2（火災原因判定書）の確定後に反映されます（様式2：${cause.status}）。`,"項目定義表 様式1");
   else if (cause.correcting) add(2,`様式2は訂正中です。原因欄には確定済みの第${cause.version}版を表示しています。`);
-  if (cause.confirmed){
+  if (cause.confirmed && !d.causeOmit){
     const words = {"判定する":"判定する","推定する":"推定する","不明とする":"不明とする"};
     for (const [w,t] of [["出火原因概要",d.text.cause],["原因判定理由",d.text.reason]]){
       for (const k of Object.keys(words)) if (k!==cause.certainty && (t||"").includes(k)) add(2,`${w}に「${k}」とありますが、様式2の判定の区分は「${cause.certainty}」です。`,"様式2との整合");
@@ -1479,7 +1485,8 @@ function renderReportPaper(c, d, staff, person, cause){
   const att = t => t ? `■添付資料による（${esc(t)}）` : "";
   const tr = (...cells) => `<tr>${cells.map(x=>Array.isArray(x)?`<td colspan="${x[1]}">${x[0]}</td>`:String(x).startsWith("<th")?x:`<td>${x}</td>`).join("")}</tr>`;
   const th = t => `<th style="width:16%;text-align:left">${t}</th>`;
-  const C = cause.confirmed ? cause : {origin:"（未確定）", source:"（未確定）", process:"（未確定）", firstIgnited:"（未確定）"};
+  const C = d.causeOmit ? {origin:d.omitCause?.origin||"", source:d.omitCause?.source||"", process:d.omitCause?.process||"", firstIgnited:d.omitCause?.firstIgnited||""}
+    : cause.confirmed ? cause : {origin:"（未確定）", source:"（未確定）", process:"（未確定）", firstIgnited:"（未確定）"};
   const w = d.weather, dm = d.damage, p3 = d.p3;
   const txt = (title, t) => `<div class="sec"><b>${title}</b><div style="white-space:pre-wrap;padding-left:1em">${esc(t||"")}</div></div>`;
   return `<div class="paper">
@@ -1544,7 +1551,7 @@ route("/case/:id/report", async ({id})=>{
   const roleP = r => lpers.filter(p=>(p.roles||[]).includes(r));
   const firemoto = lpers.slice().sort((a,b)=>Number((b.roles||[]).some(r=>r.startsWith("火元関係者")))-Number((a.roles||[]).some(r=>r.startsWith("火元関係者"))));
   const lastRev = live(revs).sort((a,b)=>b.version-a.version)[0];
-  const staleCause = locked && lastRev && cause.confirmed && (lastRev.snapshot.cause?.version||0) !== cause.version;
+  const staleCause = locked && !d.causeOmit && lastRev && cause.confirmed && (lastRev.snapshot.cause?.version||0) !== cause.version;
   const p3filled = (()=>{ const q = d.p3||{}; return Object.entries(q).some(([k,v])=> Array.isArray(v) ? v.length : (v && typeof v==="object") ? Object.values(v).some(Boolean) : !!v); })();
   const ro = (k,v) => `<div><span class="muted">${k}：</span>${esc(v||"")||'<span class="muted">未入力</span>'}</div>`;
   const insBtns = (target, items) => locked ? "" : items.filter(x=>x[1]).map(([label, text])=>`<button class="sm" data-ins="${target}" data-text="${esc(text)}">${esc(label)}</button>`).join(" ");
@@ -1576,10 +1583,12 @@ route("/case/:id/report", async ({id})=>{
    <div class="grid">${field("焼損程度",`<select data-path="damage.degree" ${dis}>${opt([""].concat(M.burnDegrees),d.damage.degree)}</select>`)}${field("焼損床面積（㎡）",inp("damage.floorArea","","","number"))}${field("焼損表面積（㎡）",inp("damage.surfaceArea","","","number"))}
    ${M.burnDegrees.map(k=>field(`焼損棟数：${k}（棟）`,inp(`damage.b.${k}`,"","","number"))).join("")}${ro("焼損棟数：計",bldgTotal(d)+"棟")}
    ${field("り災世帯",inp("damage.households","","","number"))}${field("り災人員",inp("damage.victims","","","number"))}${field("死者（人）",inp("damage.dead","","","number"))}${field("傷者（人）",inp("damage.injured","","","number"))}${field("損害額（円）",inp("damage.amount","","","number"))}</div></div>
-  <div class="card"><h3>原因（様式2の確定版から反映）</h3>
-   ${cause.confirmed?`<div class="grid">${ro("出火箇所",cause.origin)}${ro("発火源",cause.source)}${ro("経過",cause.process)}${ro("着火物",cause.firstIgnited)}${ro("判定の区分",cause.certainty)}${ro("反映元",`様式2 第${cause.version}版`)}</div>`
-     :`<p class="muted">様式2が確定していないため、原因欄は「未確定」です（様式2：${esc(cause.status)}）。</p>`}
-   <a class="btn sm" href="#/case/${id}/cause">様式2を開く</a></div>
+  <div class="card"><h3>原因</h3>
+   <label style="font-size:14px"><input type="checkbox" data-path="causeOmit" id="r_omit" ${d.causeOmit?"checked":""} ${dis}> 火災原因判定書（様式2）を省略する（小規模で出火原因が明らかな火災など）</label>
+   ${d.causeOmit?`<p class="muted">様式2を省略する場合は、下の「原因判定理由」欄に省略の理由と判定の要旨を記載します。特異な火災、隣棟への延焼、死傷者が出た火災などは省略しないことが考えられます。省略の基準は所属の規程で確認してください。【マニュアル準拠（第1章）・要確認】</p>
+    <div class="grid">${field("出火箇所",inp("omitCause.origin"))}${field("発火源",inp("omitCause.source"))}${field("経過",inp("omitCause.process"))}${field("着火物",inp("omitCause.firstIgnited"))}</div>`
+   : `<p class="muted">様式2の確定版から反映します。</p>`+(cause.confirmed?`<div class="grid">${ro("出火箇所",cause.origin)}${ro("発火源",cause.source)}${ro("経過",cause.process)}${ro("着火物",cause.firstIgnited)}${ro("判定の区分",cause.certainty)}${ro("反映元",`様式2 第${cause.version}版`)}</div>`
+     :`<p class="muted">様式2が確定していないため、原因欄は「未確定」です（様式2：${esc(cause.status)}）。</p>`)+`<a class="btn sm" href="#/case/${id}/cause">様式2を開く</a>`}</div>
   <div class="card"><h3>気象</h3><div class="grid">${field("天候",inp("weather.tenki"))}${field("風向",inp("weather.windDir","例：北西"))}${field("風速（m/s）",inp("weather.windSpeed","","","number"))}${field("気温（℃）",inp("weather.temp","","","number"))}${field("相対湿度（％）",inp("weather.humidity","","","number"))}${field("実効湿度（％）",inp("weather.effHumidity","","","number"))}${field("積雪（cm）",inp("weather.snow","","","number"))}${field("気象注意報等",inp("weather.warnings","例：乾燥注意報"))}</div>
    <p class="muted">気象は気象台等の資料で確認した値を入力してください（自動取得はしません）。</p></div>
 
@@ -1630,6 +1639,7 @@ route("/case/:id/report", async ({id})=>{
   const persist = async (action, reason="") => { try { await save("reportDocs", d, action, reason); dirty = false; return true; } catch(e){ toast("保存に失敗しました："+e.message, true); return false; } };
   $$("[data-path]").forEach(el=>el.addEventListener(el.tagName==="SELECT"||el.type==="checkbox"?"change":"input", ()=>markDirty()));
   $$('[data-path="origin.personId"]').forEach(el=>el.addEventListener("change", async ()=>{ collect(); if (await persist("更新")) router(); }));
+  $("#r_omit")?.addEventListener("change", async ()=>{ collect(); if (await persist(d.causeOmit?"様式2を省略する":"様式2の省略をやめる")) router(); }); // 欄の構成が変わるため描き直す
   $("#saveAll").onclick = async ()=>{ collect(); if (await persist("更新")){ toast("保存しました"); router(); } };
   $("#r_agg")?.addEventListener("click", ()=>{ const set = (k,v)=>{ const el = $(`[data-path="${k}"]`); if (el){ el.value = String(v); } };
     if (agg.count){ set("damage.amount",agg.amount); set("damage.floorArea",agg.floorArea); set("damage.surfaceArea",agg.surfaceArea); set("damage.households",agg.households); set("damage.victims",agg.victims); M.burnDegrees.forEach(k=>set(`damage.b.${k}`,agg.b[k])); }
@@ -2159,6 +2169,20 @@ function newCasualty(c, number){
     personId:"", kind:"", birthDate:"", occ:"", igniter:"", basis:"", dead:{place:"", cls:"", ...g(M.cas.dead), ...g(M.cas.course)}, sameBldg:"", sameRoom:"",
     inj:{part:"", severity:"", ...g(M.cas.inj)}, notes:""};
 }
+/* 焼損程度の候補【要確認：火災報告取扱要領第2の4(2)の基準を二次資料で確認したもの。原文で要確認】
+   全焼：焼き損害額が火災前の建物評価額の70%以上（70%未満でも補修して再使用できないものは全焼＝担当者が判断）
+   半焼：20%以上で全焼に該当しないもの／部分焼：20%未満でぼやに該当しないもの
+   ぼや：10%未満で焼損床面積・焼損表面積が1㎡未満のもの、または収容物のみ焼損したもの */
+function burnDegreeHint(d){
+  const ev = num(d.bldg?.evalAmount), burn = num(d.main.burn);
+  if (!burn && num(d.cont.burn)) return {deg:"ぼや", why:"建物の焼き損害がなく、収容物のみ焼損"};
+  if (!ev) return null;
+  const r = burn/ev, pct = Math.round(r*1000)/10;
+  if (r>=0.7) return {deg:"全焼", why:`焼き損害額が評価額の${pct}%（70%以上）`};
+  if (r>=0.2) return {deg:"半焼", why:`焼き損害額が評価額の${pct}%（20%以上70%未満）`};
+  if (r<0.1 && dmgFloorSum(d)<1 && num(d.surfaceArea)<1) return {deg:"ぼや", why:`焼き損害額が評価額の${pct}%（10%未満）で、焼損面積が1㎡未満`};
+  return {deg:"部分焼", why:`焼き損害額が評価額の${pct}%（20%未満）`};
+}
 function checkDamage(d, persons){
   const ck = []; const add=(lv,msg,src)=>ck.push({lv,msg,src});
   if (!d.authorStaffId) add(1,"作成者が未設定です。");
@@ -2172,10 +2196,20 @@ function checkDamage(d, persons){
   } else if (d.type==="車両" && !d.veh.regNo) add(3,"登録番号（車両を特定できる番号）が未入力です。","第7章■2⑴");
   else if (["船舶","航空機"].includes(d.type) && !d.veh.name) add(3,"船名・機名が未入力です。","第7章■2⑵");
   if (!dmgTotal(d)) add(2,"損害額が入力されていません（損害がない場合も0円であることを確認してください）。","様式6");
+  if (d.type==="建築物"){ const h = burnDegreeHint(d);
+    if (h && d.bldg.degree && h.deg!==d.bldg.degree) add(3,`焼損程度が「${d.bldg.degree}」ですが、入力した金額・面積からの候補は「${h.deg}」です（${h.why}）。補修して再使用できないため全焼とした場合などは、そのままで構いません。【要確認：基準は二次資料による】`,"火災報告取扱要領 第2の4(2)"); }
   if (dmgTotal(d) && !d.calcAttached) add(3,"損害額をシステムや表計算で算定した場合は、算定根拠として損害算定書類を添付することが望ましいとされています。","第7章■4");
   if (["その他"].includes(d.type) && !d.notes) add(3,"林野・その他の物品は、品名・り災種別・数量・損害額を品名ごとに備考に記載します。","第7章■5");
   if ((d.main.water||d.cont.water) && !d.situation && !d.cont.situation) add(3,"消火損害がある場合は、損害状況等に消火損害の程度を記載します。","第7章■3⑵");
   return ck;
+}
+/* 死者区分の候補【要確認：48時間死者は火災報告取扱要領第2の6（二次資料で確認）。30日死者の定義は未確認】 */
+function deadClassHint(x){
+  const a = x.dead?.injuredAt, b = x.dead?.diedAt; if (!a || !b) return null;
+  const h = (new Date(b) - new Date(a)) / 36e5; if (!(h>=0)) return {cls:"", why:"死亡日時が負傷日時より前になっています"};
+  if (h<=48) return {cls:"48時間", why:`負傷から${Math.round(h*10)/10}時間後に死亡（48時間以内）`};
+  if (h<=24*30) return {cls:"30日死者", why:`負傷から${Math.floor(h/24)}日後に死亡（48時間を超え30日以内。30日死者の定義は要確認）`};
+  return {cls:"", why:`負傷から${Math.floor(h/24)}日後に死亡（30日を超える）`};
 }
 function checkCasualty(x, person){
   const ck = []; const add=(lv,msg,src)=>ck.push({lv,msg,src});
@@ -2191,6 +2225,9 @@ function checkCasualty(x, person){
     if (!Object.values(x.dead.cause||{}).some(Boolean)) add(2,"死因が未選択です。","様式7");
     if (!x.dead.place) add(2,"死者の発生場所が未入力です。","様式7");
     if (!x.dead.cls) add(2,"死者区分（48時間・30日死者）が未選択です。","様式7");
+    const dh = deadClassHint(x);
+    if (dh && !dh.cls) add(2,`死者区分：${dh.why}。日時を確認してください。`,"火災報告取扱要領 第2の6");
+    else if (dh && x.dead.cls && dh.cls!==x.dead.cls) add(2,`死者区分が「${x.dead.cls}」ですが、負傷日時と死亡日時からの候補は「${dh.cls}」です（${dh.why}）。【要確認：基準は二次資料による】`,"火災報告取扱要領 第2の6");
   }
   if (x.kind==="負傷者" && !x.inj.severity) add(2,"負傷程度が未選択です。","様式7");
   if (!x.basis) add(2,"状況の根拠（確認した事実か申述か等）が未選択です。確認できた内容と申述内容を区別します。【項目定義表 様式7】");
@@ -2311,7 +2348,7 @@ route("/case/:cid/dmg/:did", async ({cid, did})=>{
   const sel = (path, list) => `<select data-path="${path}" ${dis}>${opt([""].concat(list), getPath(d,path)||"")}</select>`;
   const isB = d.type==="建築物", isV = ["車両","船舶","航空機"].includes(d.type);
   view(`${docShell({cid, title:`様式6 ${dmgLabel(d)}`, locked, d, checks, back})}
-  <div class="card"><p class="muted">建物損害額は建物のみの損害とし、土地の値段やその他の付加価値等は含めません。車両・船舶・航空機は積載物の損害額も併せて記入します。【マニュアル準拠（第7章第1節）】</p>
+  <div class="card"><p class="muted">建物損害額は建物のみの損害とし、土地の値段やその他の付加価値等は含めません。車両・船舶・航空機は積載物の損害額も併せて記入します。【マニュアル準拠（第7章第1節）】<br>損害額は火災による直接の損害です。消火に要した経費・焼跡整理費・休業による損失などの間接的な損害は含めません。【火災報告取扱要領（二次資料で確認）】</p>
    <div class="grid">${field("作成者",`<select data-path="authorStaffId" ${dis}>${optObj(lstaff,d.authorStaffId,staffLabel)}</select>`,true)}${field("作成日",inp("docDate","","","date"))}
    ${field("り災番号",`<div style="padding:9px 0">${esc(d.number)}（自動）</div>`)}${field("り災場所",inp("place","例：〇〇市〇〇町1-2-3 ①建物"),true)}
    ${field("関係者等氏名",`<select data-path="personId" ${dis}>${optObj(lpers,d.personId,p=>p.name)}</select>`)}${field("区分",sel("kind",M.dmgKinds))}
@@ -2319,7 +2356,8 @@ route("/case/:cid/dmg/:did", async ({cid, did})=>{
   ${isB?`<div class="card"><h3>建築物</h3>${locked?"":`<button class="sm" id="dm_fromcase">案件情報から構造・用途・階数を写す</button>`}<div class="grid">
    ${field("構造",sel("bldg.structure",M.structures))}${field("地上階数",inp("bldg.floorsAbove","","","number"))}${field("地下階数",inp("bldg.floorsBelow","","","number"))}
    ${field("用途",inp("bldg.use","例：店舗（販売、飲食）、共同住宅"))}${field("建築面積（㎡）",inp("bldg.buildingArea","","","number"))}${field("延べ面積（㎡）",inp("bldg.totalFloorArea","","","number"))}
-   ${field("焼損程度",sel("bldg.degree",M.burnDegrees),true)}</div>
+   ${field("焼損程度",sel("bldg.degree",M.burnDegrees),true)}${field("火災前の建物評価額（円・判定の補助）",inp("bldg.evalAmount","書類には出力しません","","number"))}</div>
+   <div class="muted" id="dm_hint">${(h=>h?`焼損程度の候補：<b>${h.deg}</b>（${esc(h.why)}）。決めるのは担当者です。【要確認：基準は二次資料による】`:"評価額と焼き損害額を入れると、焼損程度の候補を表示します。")(burnDegreeHint(d))}</div>
    <h3>り災程度</h3><div class="grid">${M.rLevels.map(l=>field(`${l}：世帯`,inp(`bldg.r.${l}.h`,"","","number"))+field(`${l}：人`,inp(`bldg.r.${l}.p`,"","","number"))).join("")}</div>
    <div class="muted" id="dm_rsum">合計：${dmgRSum(d,"h")}世帯 ${dmgRSum(d,"p")}人</div></div>`:""}
   ${isV?`<div class="card"><h3>${esc(d.type)}</h3><div class="grid">
@@ -2344,6 +2382,7 @@ route("/case/:cid/dmg/:did", async ({cid, did})=>{
   // 合計はその場で計算して表示する（画面は描き直さない）
   const live1 = () => { const t = JSON.parse(JSON.stringify(d)); $$("[data-path]").forEach(el=>setPath(t, el.dataset.path, el.type==="checkbox"?el.checked:el.value));
     $("#dm_tot").innerHTML = `${isV?"車両等":"建物"}：${yen(dmgMainTotal(t))}円　${isV?"積載物":"収容物"}：${yen(dmgContTotal(t))}円　<b>損害額合計：${yen(dmgTotal(t))}円</b>`;
+    if ($("#dm_hint") && t.bldg){ const h = burnDegreeHint(t); $("#dm_hint").innerHTML = h ? `焼損程度の候補：<b>${h.deg}</b>（${esc(h.why)}）。決めるのは担当者です。【要確認：基準は二次資料による】` : "評価額と焼き損害額を入れると、焼損程度の候補を表示します。"; }
     if ($("#dm_fsum")) $("#dm_fsum").textContent = `計：${dmgFloorSum(t)}㎡`; if ($("#dm_rsum")) $("#dm_rsum").textContent = `合計：${dmgRSum(t,"h")}世帯 ${dmgRSum(t,"p")}人`; };
   const ed = bindEditor({d, store:"damageDocs", render:live1});
   $("#dm_type").addEventListener("change", async ()=>{ ed.collect(); if (await ed.persist("り災種別の変更")) router(); }); // 欄の構成が変わるため描き直す
@@ -2383,7 +2422,9 @@ route("/case/:cid/cas/:xid", async ({cid, xid})=>{
    ${field("生年月日",inp("birthDate","","","date"))}${field("発生区分",sel("occ",M.cas.occ))}${field("出火者",sel("igniter",M.cas.igniter))}
    ${field("状況の根拠（確認した事実と申述の区別）",sel("basis",M.cas.basis))}</div>
    ${person?`<div class="muted">年齢：${esc(person.age||"")}　性別：${esc(person.sex||"")}　職業：${esc(person.job||"")}（<a href="#/case/${cid}/persons">関係者の画面</a>で編集）</div>`:""}</div>
-  ${x.kind==="死者"?`<div class="card"><h3>死者</h3><div class="grid">${field("死者の発生場所",inp("dead.place","例：①建物1階南西側居間"))}${field("区分",sel("dead.cls",M.cas.deadClass))}</div>
+  ${x.kind==="死者"?`<div class="card"><h3>死者</h3><div class="grid">${field("死者の発生場所",inp("dead.place","例：①建物1階南西側居間"))}${field("区分",sel("dead.cls",M.cas.deadClass))}
+   ${field("負傷（受傷）日時（区分の判定の補助）",inp("dead.injuredAt","","","datetime-local"))}${field("死亡日時（区分の判定の補助）",inp("dead.diedAt","","","datetime-local"))}</div>
+   <div class="muted" id="cs_hint">${(h=>h?`死者区分の候補：<b>${esc(h.cls||"該当なし")}</b>（${esc(h.why)}）`:"負傷日時と死亡日時を入れると、死者区分の候補を表示します。")(deadClassHint(x))}　負傷後48時間以内に死亡した者は火災による死者とされます。30日死者の定義は火災報告取扱要領の原文で確認が必要です。【要確認】</div>
    <h3>死者の状況</h3>${M.cas.dead.map(r=>cbRow("dead",r)).join("")}<h3>死者の発生した経過</h3>${M.cas.course.map(r=>cbRow("dead",r)).join("")}</div>`:""}
   <div class="card"><h3>出火時同一の建物等にいた人数</h3><div class="grid">${field("同棟・車両等（人）",inp("sameBldg","","","number"))}${field("同室等（人）",inp("sameRoom","","","number"))}</div></div>
   ${x.kind==="負傷者"?`<div class="card"><h3>負傷者</h3><div class="grid">${field("受傷部位及び内容",inp("inj.part","例：右前腕　II度熱傷",2))}${field("負傷程度",sel("inj.severity",M.cas.severity))}</div>${M.cas.inj.map(r=>cbRow("inj",r)).join("")}</div>`:""}
@@ -2391,7 +2432,8 @@ route("/case/:cid/cas/:xid", async ({cid, xid})=>{
   <div class="card">${field("特記事項",inp("notes","「その他」の内容、選択肢に該当しない経緯の詳細",3))}</div>
   ${docFooter({locked, d:x, revs, back, prefix:"cs"})}`);
   if (locked){ $("#cs_correct").onclick = async ()=>{ const r = await askReason("訂正理由を入力してください（確定済みの版はそのまま保存されます）"); if (!r) return; try { await save("casualties", {...x, status:"訂正中", correctionReason:r}, "訂正開始", r); router(); } catch(e){ toast(e.message,true); } }; return; }
-  const ed = bindEditor({d:x, store:"casualties"});
+  const ed = bindEditor({d:x, store:"casualties", render:()=>{ if (!$("#cs_hint")) return; const t = JSON.parse(JSON.stringify(x)); $$("[data-path]").forEach(el=>setPath(t, el.dataset.path, el.type==="checkbox"?el.checked:el.value));
+    const h = deadClassHint(t); $("#cs_hint").innerHTML = (h?`死者区分の候補：<b>${esc(h.cls||"該当なし")}</b>（${esc(h.why)}）`:"負傷日時と死亡日時を入れると、死者区分の候補を表示します。") + "　負傷後48時間以内に死亡した者は火災による死者とされます。30日死者の定義は火災報告取扱要領の原文で確認が必要です。【要確認】"; }});
   $("#cs_kind").addEventListener("change", async ()=>{ ed.collect(); if (await ed.persist("死者・負傷者の区分")) router(); });
   $("#cs_del")?.addEventListener("click", async ()=>{ const r = await askReason("この調査書を無効化します（履歴に残ります）。理由："); if (!r) return; try { await invalidate("casualties", x, r); ed.clean(); go(`#/case/${cid}`); } catch(e){ toast(e.message,true); } });
   $("#cs_confirm").onclick = async ()=>{ ed.collect(); if (await confirmDoc({store:"casualties", doc:x, caseId:cid, checks:checkCasualty(x, lpers.find(p=>p.id===x.personId)), snapshot:{case:c, staff, persons:lpers}, title:"死傷者の調査書"})){ ed.clean(); router(); } };
@@ -2564,6 +2606,8 @@ M.guide = [
   {id:"g2a", s:2, t:"現場の位置及び付近の状況", w:"現場の特定と、周囲の状況を記録するため。", r:"所在地、周囲の建物・道路等の状況", f:"様式4の1", ref:"第5章・様式4", tag:"マニュアル準拠", go:"doc4", h:"doc4"},
   {id:"g2b", s:2, t:"立会人の確保と出火前の状況の説明", w:"実況見分では立会人を求めるよう努め、出火前の状況を説明してもらってから見分・発掘を行うため。", r:"立会人の氏名・年齢、説明の内容（立会人説明として記録）", f:"様式4（立会人・本文の立会人説明）", x:"立会人の説明は「立会人〇〇の説明によると、「…」とのことである。」と前置きして記載する。", ref:"第5章第3節■3", tag:"マニュアル準拠", go:"doc4", h:"witness"},
   {id:"g2c", s:2, t:"現場の全景写真", w:"現場全体の状況を客観的に残すため。", r:"現場の全景", f:"様式4の4（図面及び写真）", ref:"第5章第5節", tag:"マニュアル準拠", go:"photos", h:"ph:現場の全景"},
+  {id:"g2d", s:2, t:"写真の撮り方", w:"写真は文章の補足資料で、撮影位置と対象が分からないと立証に使えないため。", r:"撮影ポイント（図面に記入）、対象に正対した写真、重要な物件の明示。人物や道具は写し込まない", f:"様式4の4（図面及び写真）", x:"写真だけに頼らず、文章で見分した事実を記録する。", ref:"第5章（写真）", tag:"マニュアル準拠", go:"photos"},
+  {id:"g2e", s:2, t:"図面の作成", w:"位置関係を正確に伝え、他の書類から引用しやすくするため。", r:"原則として北を上にし、正確な縮尺と標準化された記号で作成した図面", f:"様式4の4（図面及び写真）", ref:"第5章（図面）", tag:"マニュアル準拠", go:"photos"},
   {id:"g3a", s:3, t:"建物の全景（四方向）", w:"建物外周の焼損状況と延焼の方向を記録するため。", r:"四方向からの全景写真、外周の焼損状況", f:"様式4の2（現場の模様）・4", ref:"第5章第5節", tag:"マニュアル準拠", b:true, go:"photos", h:"ph:建物の全景"},
   {id:"g3b", s:3, t:"見分の順序（燃え止まりから出火箇所へ）", w:"焼損の強弱から延焼経路を明らかにし、出火箇所の判定につなげるため。", r:"燃え止まりの建物・部屋から出火箇所に向かう順の見分記録。周囲は概括的に、出火箇所に近づくほど詳細に", f:"様式4の2⑴", ref:"様式4の2⑴", tag:"マニュアル準拠", b:true, go:"doc4", h:"doc4"},
   {id:"g4a", s:4, t:"建物内部の状況（階・部屋の配置）", w:"内部の延焼経路と各室の位置関係を把握するため。", r:"各階・各室の配置と、内部の焼損の概要", f:"様式4の2（現場の模様）", ref:"様式4", tag:"マニュアル準拠", b:true, go:"locations", h:"locs"},
@@ -2581,6 +2625,7 @@ M.guide = [
   {id:"g8c", s:8, t:"申述の食い違いの確認", w:"同じ事象についての申述が異なると、書類の信用性が損なわれるため。食い違いは更に質問して明らかにする。", r:"食い違いの有無と、追加の質問の結果", f:"様式5（追加の回）", ref:"第6章第3節■1⑵", tag:"マニュアル準拠", go:"compare", h:"iv"},
   {id:"g8d", s:8, t:"任意で得られない資料・報告", w:"任意の提出が困難な場合は、資料提出命令・報告徴収で求めることができるため。", r:"任意依頼の経過、命令・徴収の内容、交付・提出の結果", f:"様式8・9", ref:"第9章", tag:"マニュアル準拠", go:"home", h:"orders"},
   {id:"g9a", s:9, t:"損害の調査", w:"棟ごと（車両等は1台ごと）の損害を記録し、様式1に集計するため。", r:"焼損程度、焼損床面積（階ごと）・表面積、焼き・消火・爆発損害、収容物。土地の値段は含めない", f:"様式6 → 様式1", ref:"第7章", tag:"マニュアル準拠", go:"home", h:"damage"},
+  {id:"g9c", s:9, t:"棟の数え方", w:"焼損棟数・焼損程度は棟ごとに数えるため。", r:"独立した1つの建物を1棟とする。渡り廊下等で2つ以上の棟につながっている場合は、その部分を折半してそれぞれの棟に含める", f:"様式6（棟ごと）→ 様式1の焼損棟数", ref:"火災報告取扱要領 第2の4(1)（二次資料で確認・要確認）", tag:"要確認", b:true, go:"home", h:"damage"},
   {id:"g9b", s:9, t:"死傷者の調査", w:"死傷者が発生した経過等の実態を把握するため。", r:"死傷者1人ごとの状況。確認した事実と申述を区別する", f:"様式7 → 様式1", x:"死傷者の写真は、出火出場時に撮影したものは様式3へ、白ひも等で再現して撮影したものは様式4へ添付する。", ref:"第8章", tag:"マニュアル準拠", go:"home", h:"cas"},
   {id:"g10a", s:10, t:"出火建物・出火箇所の判定", w:"出火箇所の判定は棟数に関係なく必須のため。", r:"実況見分・出火出場時の見分・発見状況からの引用と結論", f:"様式2の1・2", ref:"第3章第3節", tag:"マニュアル準拠", go:"cause", h:"cause"},
   {id:"g10b", s:10, t:"火源ごとの検討と反証", w:"出火箇所の火源をすべて検討し、可能性を残さない表現で否定する必要があるため。", r:"火源ごとの引用と結論、発火源の6つの観点", f:"様式2の3", ref:"第3章第3節■3", tag:"マニュアル準拠", go:"cause", h:"cause"},
